@@ -1,0 +1,8 @@
+test:
+  override:
+    - "/bin/true"
+deployment:
+  live:
+    branch: laterpay
+    heroku:
+      appname: destalinator
