@@ -1,5 +1,5 @@
 # Name of your Slack -- just the aprt before '.slack.com'
-slack_name: rands-leadership
+slack_name: laterpay
 # Name of environmental variable holding a valid Slackbot API token
 slackbot_api_token_env_varname: SB_TOKEN
 # Name of environmental variable holding a valid general-purpose API token
@@ -8,7 +8,7 @@ api_token_env_varname: API_TOKEN
 warn_threshold: 30
 # Days of silence before we auto-archive a channel
 archive_threshold: 60
-earliest_archive_date: "2016-01-28"  # Do not archive before this date
+earliest_archive_date: "2016-03-14"  # Do not archive before this date
 # Where should we announce new channels?
 announce_channel: "zmeta-new-channels"
 # Where do we send control messages?
