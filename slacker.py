@@ -87,7 +87,7 @@ class Slacker(object):
     def get_channels(self, exclude_archived=True):
         """
         return a {channel_name: channel_id} dictionary
-        if exclude_arhived (default: True), only shows non-archived channels
+        if exclude_archived (default: True), only shows non-archived channels
         """
         channels = self.get_all_channel_objects(exclude_archived=exclude_archived)
         self.channels_by_id = {x['id']: x['name'] for x in channels}
@@ -104,6 +104,19 @@ class Slacker(object):
         if not ret['ok']:
             print ret
         return ret['ok']
+
+    def get_channel_members_ids(self, channel_name):
+        """
+        returns an array of member IDs for channel_name
+        """
+        return self.get_channel_info(channel_name)['members']
+
+    def get_channel_member_names(self, channel_name):
+        """
+        returns an array of ["@member"] for members of the channel
+        """
+        members = self.get_channel_members_ids(channel_name)
+        return ["@" + self.users_by_id[x] for x in members]
 
     def get_channel_info(self, channel_name):
         """
@@ -127,7 +140,7 @@ class Slacker(object):
     def get_all_channel_objects(self, exclude_archived=True):
         """
         return all channels
-        if exclude_arhived (default: True), only shows non-archived channels
+        if exclude_archived (default: True), only shows non-archived channels
         """
 
         url_template = self.url + "channels.list?exclude_archived={}&token={}"
