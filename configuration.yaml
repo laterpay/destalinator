@@ -1,13 +1,19 @@
 # Name of your Slack (Deprecated in favour of the SLACK_NAME env var)
 slack_name: laterpay
 
-# Name of environmental variable holding a valid Slackbot API token
+# Name of environment variable holding a valid Slackbot API token
 slackbot_api_token_env_varname: SB_TOKEN
 
-# Name of environmental variable holding a valid general-purpose API token
+# Name of environment variable holding a valid general-purpose API token
 api_token_env_varname: API_TOKEN
 
-# Name of environmental variable determining whether output debug mode is enabled
+# Name of environment variable that determines if destalinator should 
+# actually do things to a live slack. Without this environment variable, 
+# everything will output in a "dry run" fashion (debug messages should take place,
+# but no changes or messages should affect a live Slack).
+destalinator_activated_env_varname: DESTALINATOR_ACTIVATED
+
+# Name of environment variable determining whether output debug mode is enabled
 output_debug_env_varname: DESTALINATOR_SLACK_VERBOSE
 
 # Days of silence before we warn a channel it's going to be archived
@@ -18,6 +24,9 @@ archive_threshold: 60
 
 # Do not archive before this date
 earliest_archive_date: "2016-01-28"
+
+# Where should we post "general" announcement messages?
+general_message_channel: "general"
 
 # Where should we announce new channels?
 announce_channel: "zmeta-new-channels"
@@ -40,3 +49,12 @@ ignore_channel_patterns:
 # Users to ignore when considering if a channel is stale
 ignore_users:
   - USLACKBOT
+
+# Which message subtypes count as activity?
+# "None" means the message was typed by a human and is included by default.
+included_subtypes:
+  - bot_message
+  - file_mention
+  - file_share
+  - me_message
+  - slackbot_response
