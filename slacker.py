@@ -1,14 +1,18 @@
 #! /usr/bin/env python
 
+import json
 import re
 import time
 
 import requests
 
+from config import WithConfig
+from utils.with_logger import WithLogger
 
-class Slacker(object):
 
-    def __init__(self, slack_name, token):
+class Slacker(WithLogger, WithConfig):
+
+    def __init__(self, slack_name, token, init=True):
         """
         slack name is the short name of the slack (preceding '.slack.com')
         token should be a Slack API Token.
@@ -17,30 +21,24 @@ class Slacker(object):
         self.token = token
         assert self.token, "Token should not be blank"
         self.url = self.api_url()
-        self.get_users()
-        self.get_channels()
+        self.session = requests.Session()
+        if init:
+            self.get_users()
+            self.get_channels()
 
     def get_emojis(self):
         url = self.url + "emoji.list?token={}".format(self.token)
-        payload = requests.get(url).json()
-        return payload
-
-    def get_user(self, uid):
-        url = self.url + "users.info?token={}&user={}".format(self.token, uid)
-        payload = requests.get(url).json()
+        payload = self.session.get(url).json()
         return payload
 
     def get_users(self):
-        url = self.url + "users.list?token=" + self.token
-        payload = requests.get(url).json()['members']
-        self.users_by_id = {x['id']: x['name'] for x in payload}
-        self.users_by_name = {x['name']: x['id'] for x in payload}
-        self.restricted_users = [x['id'] for x in payload if x.get('is_restricted')]
-        self.ultra_restricted_users = [x['id'] for x in payload if x.get('is_ultra_restricted')]
+        users = self.get_all_user_objects()
+        self.users_by_id = {x['id']: x['name'] for x in users}
+        self.restricted_users = [x['id'] for x in users if x.get('is_restricted')]
+        self.ultra_restricted_users = [x['id'] for x in users if x.get('is_ultra_restricted')]
         self.all_restricted_users = set(self.restricted_users + self.ultra_restricted_users)
-        # print "all restricted users: {}".format(self.all_restricted_users)
-        # print "All restricted user names: {}".format([self.users_by_id[x] for x in self.all_restricted_users])
-        return payload
+        self.logger.debug("All restricted user names: %s", ', '.join([self.users_by_id[x] for x in self.all_restricted_users]))
+        return users
 
     def asciify(self, text):
         return ''.join([x for x in list(text) if ord(x) in range(128)])
@@ -52,21 +50,38 @@ class Slacker(object):
         else:
             if fail_silently:
                 return "#{}".format(channel_name)
-            else:
-                return None
 
     def get_messages_in_time_range(self, oldest, cid, latest=None):
         assert cid in self.channels_by_id, "Unknown channel ID {}".format(cid)
         cname = self.channels_by_id[cid]
         messages = []
         done = False
+        retry_attempts = 0
+        max_retry_attempts = 10
         while not done:
             murl = self.url + "channels.history?oldest={}&token={}&channel={}".format(oldest, self.token, cid)
             if latest:
                 murl += "&latest={}".format(latest)
             else:
                 murl += "&latest={}".format(int(time.time()))
-            payload = requests.get(murl).json()
+            response = self.session.get(murl)
+
+            try:
+                response.raise_for_status()
+            except requests.exceptions.HTTPError as e:
+                if retry_attempts >= max_retry_attempts:
+                    raise e
+                if 'Retry-After' in response.headers:
+                    retry_after = int(response.headers['Retry-After']) * 2
+                    self.logger.debug('Ratelimited. Sleeping %s', retry_after)
+                else:
+                    retry_attempts += 1
+                    retry_after = retry_attempts * 5
+                    self.logger.debug('Unknown requests error. Sleeping %s. %s/%s retry attempts.', retry_after, retry_attempts, max_retry_attempts)
+                time.sleep(retry_after)
+                continue
+
+            payload = response.json()
             messages += payload['messages']
             if payload['has_more'] is False:
                 done = True
@@ -89,8 +104,6 @@ class Slacker(object):
             m = [x for x in self.channels if self.channels[x] == stripped]
             if m:
                 return "#" + m[0]
-            else:
-                return cid
         elif first == "@":
             # occasionally input will have the format "userid|name".
             #  in case the name changed at some point,
@@ -99,7 +112,7 @@ class Slacker(object):
                 uname_parts = stripped.split("|")
                 uname = self.users_by_id[uname_parts[0]]
             else:
-                uname = self.users_by_id[stripped]      
+                uname = self.users_by_id[stripped]
             if uname:
                 return "@" + uname
         return cid
@@ -138,16 +151,8 @@ class Slacker(object):
             else:
                 channel = channel_name
             return self.channels_by_name[channel]
-        except KeyError as e: # channel not found
+        except KeyError:  # channel not found
             return None
-
-    def delete_message(self, cid, message_timestamp):
-        url_template = self.url + "chat.delete?token={}&channel={}&ts={}"
-        url = url_template.format(self.token, cid, message_timestamp)
-        ret = requests.get(url).json()
-        if not ret['ok']:
-            print(ret)
-        return ret['ok']
 
     def get_channel_members_ids(self, channel_name):
         """
@@ -162,7 +167,7 @@ class Slacker(object):
         """
 
         mids = set(self.get_channel_members_ids(channel_name))
-        print("mids for {} is {}".format(channel_name, mids))
+        self.logger.debug("Current members in %s are %s", channel_name, mids)
         return mids.intersection(self.all_restricted_users)
 
     def get_channel_member_names(self, channel_name):
@@ -180,11 +185,10 @@ class Slacker(object):
         cid = self.get_channelid(channel_name)
         now = int(time.time())
         url = url_template.format(self.token, cid)
-        ret = requests.get(url).json()
+        ret = self.session.get(url).json()
         if ret['ok'] is not True:
             m = "Attempted to get channel info for {}, but return was {}"
             m = m.format(channel_name, ret)
-            self.warning(m)
             raise RuntimeError(m)
         created = ret['channel']['created']
         age = now - created
@@ -203,15 +207,51 @@ class Slacker(object):
         else:
             exclude_archived = 0
         url = url_template.format(exclude_archived, self.token)
-        request = requests.get(url)
+        request = self.session.get(url)
         payload = request.json()
         assert 'channels' in payload
         return payload['channels']
+
+    def get_all_user_objects(self):
+        url = self.url + "users.list?token=" + self.token
+        return self.session.get(url).json()['members']
 
     def archive(self, channel_name):
         url_template = self.url + "channels.archive?token={}&channel={}"
         cid = self.get_channelid(channel_name)
         url = url_template.format(self.token, cid)
-        request = requests.get(url)
+        request = self.session.get(url)
         payload = request.json()
         return payload
+
+    def post_message(self, channel, message, message_type=None):
+        """
+        Posts a `message` into a `channel`.
+        Optionally append an invisible attachment with 'fallback' set to `message_type`.
+
+        Note: `channel` value should not be preceded with '#'.
+        """
+        assert channel  # not blank
+        if channel[0] == '#':
+            channel = channel[1:]
+
+        post_data = {
+            'token': self.token,
+            'channel': channel,
+            'text': message.encode('utf-8')
+        }
+
+        bot_name = self.config.bot_name
+        bot_avatar_url = self.config.bot_avatar_url
+        if bot_name or bot_avatar_url:
+            post_data['as_user'] = False
+            if bot_name:
+                post_data['username'] = bot_name
+            if bot_avatar_url:
+                post_data['icon_url'] = bot_avatar_url
+
+        if message_type:
+            post_data['attachments'] = json.dumps([{'fallback': message_type}], encoding='utf-8')
+
+        p = self.session.post(self.url + "chat.postMessage", data=post_data)
+        return p.json()

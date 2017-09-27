@@ -1,7 +1,7 @@
 #! /usr/bin/env python
 
-import copy
 import argparse
+import copy
 import json
 import operator
 import re
@@ -10,14 +10,13 @@ import traceback
 
 # support Python 2 and 3's versions of this module
 try:
-    import html.parser as HTMLParser
+    import html
+    HTML_UNESCAPER = html
 except ImportError:
     import HTMLParser
+    HTML_UNESCAPER = HTMLParser.HTMLParser()
 
-import config as _config
 import executor
-
-config = _config.Config()
 
 
 class Flagger(executor.Executor):
@@ -26,16 +25,9 @@ class Flagger(executor.Executor):
                  '>=': operator.ge, '<=': operator.le}
 
     def __init__(self, *args, **kwargs):
-        self.htmlparser = HTMLParser.HTMLParser()
-        super(Flagger, self).__init__(*args, **kwargs)
+        self.debug = kwargs.pop('debug', False)
+        super(self.__class__, self).__init__(*args, **kwargs)
         self.now = int(time.time())
-
-    def dprint(self, message):
-        """
-        If we're in debug or verbose mode, print message
-        """
-        if self.debug or self.verbose:
-            print(message)
 
     def extract_threshold(self, token):
         """
@@ -53,8 +45,8 @@ class Flagger(executor.Executor):
         if comparator == '':  # no comparator specified
             comparator = '>='
 
-        comparator = self.htmlparser.unescape(comparator)
-        self.dprint("token: {} comparator: {} value: {}".format(token, comparator, value))
+        comparator = HTML_UNESCAPER.unescape(comparator)
+        self.logger.debug("token: %s comparator: %s value: %s", token, comparator, value)
 
         assert comparator in self.operators
         return (comparator, value)
@@ -63,9 +55,9 @@ class Flagger(executor.Executor):
         """
         sets up known control configuration based on control channel messages
         """
-        channel = config.control_channel
+        channel = self.config.control_channel
         if not self.slacker.channel_exists(channel):
-            self.ds.warning("Flagger control channel does not exist, cannot run. Please create #{}.".format(channel))
+            self.logger.warning("Flagger control channel does not exist, cannot run. Please create #%s.", channel)
             return False
         cid = self.slacker.get_channelid(channel)
         messages = self.slacker.get_messages_in_time_range(0, cid, self.now)
@@ -76,13 +68,13 @@ class Flagger(executor.Executor):
             if tokens[0:3] != ['flag', 'content', 'rule']:
                 continue
             if len(tokens) < 5:
-                self.ds.warning("control message {} has too few tokens".format(text))
+                self.logger.warning("Control message %s has too few tokens", text)
                 continue
             if len(tokens) == 5 and tokens[4] == 'delete':
                 uuid = tokens[3]
                 if uuid in control:
                     del(control[uuid])
-                    self.dprint("Message {} deletes UUID {}".format(text, uuid))
+                    self.logger.debug("Message %s deletes UUID %s", text, uuid)
                     continue
             try:
                 tokens = text.split()
@@ -99,12 +91,10 @@ class Flagger(executor.Executor):
             except Exception as e:
                 tb = traceback.format_exc()
                 m = "Couldn't create flagger rule with text {}: {} {}".format(text, Exception, e)
-                self.dprint(m)
-                self.dprint(tb)
-                if not self.debug:
-                    self.ds.warning(m)
+                self.logger.warning(m)
+                self.logger.debug(tb)
         self.control = control
-        self.dprint("control: {}".format(json.dumps(self.control, indent=4)))
+        self.logger.debug("control: %s", json.dumps(self.control, indent=4))
         self.emoji = [x['emoji'] for x in self.control.values()]
         self.initialize_emoji_aliases()
         return True
@@ -120,9 +110,9 @@ class Flagger(executor.Executor):
         This method grabs the emoji list from the Slack and creates the equivalence
         structure
         """
-        self.dprint("Starting emoji alias list")
+        self.logger.debug("Starting emoji alias list")
         emojis_response = self.slacker.get_emojis()
-        self.dprint("emojis_response keys are {}".format(emojis_response.keys()))
+        self.logger.debug("emojis_response keys are %s", emojis_response.keys())
         emojis = emojis_response['emoji']
         equivalents = {}
         for emoji in emojis:
@@ -130,7 +120,7 @@ class Flagger(executor.Executor):
             target_type, target_value = target.split(":", 1)
             if target_type != "alias":
                 continue
-            self.dprint("Found emoji alias: {} <-> {}".format(emoji, target_value))
+            self.logger.debug("Found emoji alias: %s <-> %s", emoji, target_value)
             if emoji not in equivalents:
                 equivalents[emoji] = []
             if target_value not in equivalents:
@@ -138,9 +128,9 @@ class Flagger(executor.Executor):
             equivalents[emoji].append(target_value)
             equivalents[target_value].append(emoji)
         self.emoji_equivalents = equivalents
-        self.dprint("equivalents: {}".format(json.dumps(self.emoji_equivalents, indent=4)))
+        self.logger.debug("equivalents: %s", json.dumps(self.emoji_equivalents, indent=4))
         if "floppy_disk" in self.emoji_equivalents.keys():
-            self.dprint("floppy_disk: {}".format(self.emoji_equivalents['floppy_disk']))
+            self.logger.debug("floppy_disk: %s", self.emoji_equivalents['floppy_disk'])
 
     def message_destination(self, message):
         """
@@ -153,25 +143,18 @@ class Flagger(executor.Executor):
         reactions = message.get("reactions")
         emoji_set = set(self.emoji)
         current_reactions = {}
-        t = message.get("text")
-        if t.find("SVP") != -1:
-            def d(p):
-                pass  # print p
-        else:
-            def d(p):
-                pass
-        d("reactions: {}".format(reactions))
-        d("emoji_equivalents:\n{}".format(json.dumps(self.emoji_equivalents, indent=4)))
+        self.logger.debug("reactions: %s", reactions)
+        self.logger.debug("emoji_equivalents:\n%s", json.dumps(self.emoji_equivalents, indent=4))
         if "floppy_disk" in self.emoji_equivalents.keys():
-            d("floppy_disk: {}".format(self.emoji_equivalents['floppy_disk']))
+            self.logger.debug("floppy_disk: %s", self.emoji_equivalents['floppy_disk'])
         for reaction in reactions:
             count = reaction['count']
             current_emoji = reaction['name']
-            d("current_emoji: {}".format(current_emoji))
+            self.logger.debug("current_emoji: %s", current_emoji)
             equivalents = copy.copy(self.emoji_equivalents.get(current_emoji, []))
-            d("equivalents = {}".format(equivalents))
+            self.logger.debug("equivalents: %s", equivalents)
             equivalents.append(current_emoji)
-            d("equivalents = {}".format(equivalents))
+            self.logger.debug("equivalents: %s", equivalents)
             current_set = set(equivalents)
             i = current_set.intersection(emoji_set)
             if not i:
@@ -179,7 +162,7 @@ class Flagger(executor.Executor):
             for ce in equivalents:
                 current_reactions[ce] = current_reactions.get(ce, 0) + count
             # if we're here, at least one emoji matches (but count may still not be right)
-        d("Current reactions: {}".format(current_reactions))
+        self.logger.debug("Current reactions: {}".format(current_reactions))
         for uuid in self.control:
             rule = self.control[uuid]
             for ce in current_reactions:
@@ -210,7 +193,6 @@ class Flagger(executor.Executor):
 
     def announce_interesting_messages(self):
         messages = self.get_interesting_messages()
-        slack_name = _config.SLACK_NAME
         for message, channels in messages:
             ts = message["ts"].replace(".", "")
             channel = message["channel"]
@@ -218,27 +200,34 @@ class Flagger(executor.Executor):
             author_name = self.slacker.users_by_id[author]
             text = self.slacker.asciify(message["text"])
             text = self.slacker.detokenize(text)
-            url = "http://{}.slack.com/archives/{}/p{}".format(slack_name, channel, ts)
+            url = "http://{}.slack.com/archives/{}/p{}".format(self.config.slack_name, channel, ts)
             m = "*@{}* said in *#{}* _'{}'_ ({})".format(author_name, channel, text, url)
             for output_channel in channels:
                 if self.slacker.channel_exists(output_channel["output"]):
                     md = "Saying {} to {}".format(m, output_channel["output"])
-                    self.dprint(md)
-                    if not self.debug and self.destalinator_activated:
-                        self.sb.say(output_channel["output"], m)
+                    self.logger.debug(md)
+                    if not self.debug and self.config.activated:  # TODO: rename debug to dry run?
+                        self.slackbot.say(output_channel["output"], m)
                 else:
-                    self.ds.warning("Attempted to announce in {} because of rule :{}:{}{}, but channel does not exist.".format(
-                            output_channel["output"], output_channel["emoji"], output_channel["comparator"], output_channel["threshold"]))
+                    self.logger.warning("Attempted to announce in %s because of rule :%s:%s%s, but channel does not exist.".format(
+                        output_channel["output"],
+                        output_channel["emoji"],
+                        output_channel["comparator"],
+                        output_channel["threshold"]
+                    ))
 
     def flag(self):
+        if self.config.flagger_disabled:
+            self.logger.info("Not Flagging... Flagger disabled")
+            return
+        self.logger.info("Flagging")
         if self.initialize_control():
             self.announce_interesting_messages()
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Flag interesting Slack messages.')
     parser.add_argument("--debug", action="store_true", default=False)
-    parser.add_argument("--verbose", action="store_true", default=False)
     args = parser.parse_args()
 
-    flagger = Flagger(debug=args.debug, verbose=args.verbose)
-    flagger.flag()
+    Flagger(debug=args.debug).flag()

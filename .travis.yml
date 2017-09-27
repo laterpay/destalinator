@@ -1,0 +1,30 @@
+sudo: required
+
+services:
+  - docker
+
+language: python
+
+python:
+  - 2.7
+  - 3.6
+
+cache: pip
+
+install:
+  - pip install -r build-requirements.txt && pip install -r requirements.txt
+
+script:
+  - flake8 --ignore=E501
+  # Skip tests/test_destalinator.py due to heavy mocking. See https://github.com/jendrikseipp/vulture/issues/95
+  # Skip utils/slack_logging.py due to implementing Handler#emit but never calling directly
+  - vulture . --exclude=tests/test_destalinator.py,utils/slack_logging.py
+  - coverage run --branch --source=. -m unittest discover -f && coverage report -m --skip-covered --fail-under=71 && coveralls
+
+deploy:
+  provider: script
+  skip_cleanup: true
+  script: chmod +x docker-deploy.sh && sh $TRAVIS_BUILD_DIR/docker-deploy.sh
+  on:
+    tags: true
+    repo: randsleadershipslack/destalinator
